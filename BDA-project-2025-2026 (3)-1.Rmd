@@ -1,0 +1,1836 @@
+---
+title: "Multivariate Analysis of MoTrPAC Transcriptomics and Metabolomics Data"
+author: "Sara López Merino and Thomas Uijen"
+date: "06/01/2026 - 17/01/2026"
+output:
+  pdf_document:
+    number_sections: no
+    toc: yes
+    toc_depth: 3
+  html_document:
+    toc: yes
+    toc_depth: '3'
+    df_print: paged
+editor_options:
+  markdown:
+    wrap: 72
+bibliography: references.bib
+---
+
+\newpage
+
+# BDA project 2025-2026
+
+## Changes to the first part
+
+```{r truncate output, echo=FALSE, include=FALSE, message=FALSE}
+# save the built-in output hook
+hook_output <- knitr::knit_hooks$get("output")
+
+# set a new output hook to truncate text output
+knitr::knit_hooks$set(output = function(x, options) {
+  if (!is.null(n <- options$out.lines)) {
+    x <- xfun::split_lines(x)
+    if (length(x) > n) {
+      # truncate the output
+      x <- c(head(x, n/2), '....', tail(x, n/2 + 1), '\n')
+    }
+    x <- paste(x, collapse = "\n")
+  }
+  hook_output(x, options)
+})
+```
+
+
+
+```{r}
+library(umap)
+library(MASS)
+library(gtools)
+library(stringr)
+```
+
+### The MoTrPAC data
+
+The Molecular Transducers of Physical Activity Consortium (MoTrPAC)
+profiled the dynamic change of multiple omics layers in several organs
+of rats undergoing physical training. The results are presented in the
+Nature article "Temporal dynamics of the multi-omic response to
+endurance exercise training". 
+
+### Experimental design
+
+Six-month-old male and female Fischer 344 rats were subjected to
+progressive treadmill endurance exercise training for 1, 2, 4 or 8
+weeks. Sex-matched sedentary, untrained rats were used as controls. In
+this project we will focus on the transcriptomics data obtained from
+blood cells and metabolomics data from plasma. Unfortunately these
+measurements do not all come from the same rats.
+
+#DATA
+
+```{r Data importing, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+df_metabolomics = read.csv("Plasma_Metabolomics_Normalized.csv", row.names = 1)
+df_transcriptomics = read.csv("Blood_Transcriptomics_Counts.csv",row.names = 1)
+```
+
+```{r metabolomics data example, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+print(df_metabolomics[1:7, c(1:8)])
+```
+
+In the first few columns are numbers identifying the specific rat
+number, the experimental group (training or control) and experimental
+time (1,2,4,8 weeks) as well as the sex of the rat (1 = female, 2 =
+male). From column 4 onwards is where the metabolomics data is shown.
+For the metabolomics data, the metabolite levels are normalized by the
+measurement of a known standard.
+
+```{r transcriptomics data example, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+print(df_transcriptomics[1:7, c(1:8)])
+```
+
+The transcriptomics data is transposed, the rats are in the columns
+while the genes are in the rows. The experimental details for each rat
+can be found in the last few rows of the data frame. Furthermore, the
+counts are not considered numeric. 
+
+```{r Transpose Transcriptomics data}
+df_transcriptomics = data.frame(t(df_transcriptomics))
+print(df_transcriptomics[1:7, c(1:8)])
+```
+
+
+### Linear Algebra (Johan Westerhuis, 05-01-2026)
+
+#### 1A) Data pretreatment:
+
+```{r Assignment 1A, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(ggrepel)
+## 1
+df_metabolomics_Exp<-df_metabolomics|>
+  dplyr::select(1:3)|>
+  unite(col = "Groups",Experiment.Group,Experiment.Time,sep=" ",remove = F)
+
+
+## 2/3
+df_metabolomics_Values<-df_metabolomics|>
+  dplyr::select(-c(1:3))|>
+  dplyr::select(-Oleoyl.EA)
+
+
+
+```
+
+#### 1B)
+
+
+```{r Assignment 1B, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+df_transcriptomics_Exp<-df_transcriptomics|>
+  dplyr::select(Experiment.Group,Experiment.Time,sex)|>
+  unite(Experiment.Group,Experiment.Time,col="Groups",sep=" ",remove =F)
+
+df_transcriptomics_Values<-df_transcriptomics|>
+  dplyr::select(-c(Experiment.Group,Experiment.Time,sex))
+```
+
+```{r Make transcriptomics counts numeric}
+df_transcriptomics_Values = as.data.frame(apply(df_transcriptomics_Values, 2, function(x) as.numeric(as.character(x))))
+```
+
+#### 1C)
+
+
+```{r Assignment 1C,Filter genes, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+# Compute number of non-zero counts per gene
+non_zero_genes<-apply(df_transcriptomics_Values, 2, function(x){sum(x!=0)})
+
+# Filter transcriptomics data
+df_transcriptomics_Filtered<-df_transcriptomics_Values[,non_zero_genes>25]
+
+# Verify procedure
+!any(apply(df_transcriptomics_Filtered, 2, function(x){sum(x!=0)})<=25)
+
+```
+
+#### 1D)
+
+
+```{r Assignment 1D, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+dfs<-list(df_metabolomics_Exp=df_metabolomics_Exp,
+          df_metabolomics_Values=df_metabolomics_Values,
+          df_transcriptomics_Filtered=df_transcriptomics_Filtered,
+          df_transcriptomics_Exp=df_transcriptomics_Exp)
+
+lapply(names(dfs), function(nm) {
+  write.csv(dfs[[nm]], paste0(nm, ".csv"), row.names = TRUE)
+})
+```
+
+Check whether the files were written correctly. Now you have cleaned
+metabolomics and transcriptomics data which you will explore in the next
+assignments.
+
+#### 1E)
+
+```{r Assignment 1E, include=TRUE, eval=TRUE, echo=TRUE}
+## 1
+
+sum_per_rat<-rowSums(df_transcriptomics_Filtered)
+sum_per_gene<-colSums(df_transcriptomics_Filtered)
+
+
+## 2
+df<-data.frame(value=c(sum_per_rat,sum_per_gene),
+           group=c(rep("Log-sum per rat",length(sum_per_rat)),rep("Log-sum per gene",length(sum_per_gene))))
+
+ggplot(df,aes(x=log(value),after_stat(density)))+geom_histogram(fill="grey",colour="black")+facet_wrap(~group,scales="free")+labs(x="Log-sum",title="Histograms for the log sum per gene and per rat")
+
+
+
+```
+
+#### 1F): Interpretation. (Fixed)
+
+1)  In the first histogram we learn about the samples: The rowSum is the
+    total expression per sample, hence the overall signal across all
+    genes. We observe a narrow distribution in the dataset, suggesting
+    that most of the samples have similar total expression, meaning that
+    the measurements are consistent across samples. Values lying in the
+    tails may suggest potentials outliers, this means unusually low or
+    high total expression (overall signal) which mainly reflect the
+    biological effects on the gene expressions. While some random noise
+    is still present, by log-transforming the data we compensate for
+    systematic error and bias.
+
+In the second histogram we learn about variables: The colSum represents
+the total expression per gene across samples. We observe a wide
+distribution of log-transformed colSums, indicating strong heterogeneity
+among genes, hence some genes are highly expressed across the samples
+while others are lowly expressed. This depicts that genes contribute
+differently to the overall transcriptional signal, this is a common
+feature of transcriptomics data sets. The plot also shows a long right
+tail, indicating a small subset of very highly expressed genes, this is
+normally expected in transcriptomics since most genes are expressed at
+low levels, while only a small number of housekeeping genes are
+expressed at very high levels, hence creating a right-skewed
+distribution.
+
+2)  When the sum of all values of a sample is larger than that of
+    another sample that suggests a higher total measured expression in
+    that precise sample, hence higher sequencing depth (or: overall
+    transcriptional activity). In the case that the sum of all values of
+    a feature in our case a gene is larger than that of another feature,
+    it means that this gene is more abundantly expressed across the
+    dataset, probably because it is expressed at higher levels or
+    because it is expressed in more samples.
+
+3)  It is useful because the sums either for columns or rows vary over a
+    large/wide range of values and the log transformation reduces the
+    impact of extreme values, making the distributions easier not only
+    to visualize but also to compare, this allows patterns and potential
+    outliers to be identified more clearly.
+
+#### End of text block.
+
+#### 1G)
+
+```{r Assignment 1G, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+## 1
+col_means<-apply(df_transcriptomics_Filtered,2,mean)
+col_sds<-apply(df_transcriptomics_Filtered,2,sd)
+
+df<-tibble(col_means=col_means,col_sds<-col_sds)
+
+ggplot(df,aes(x=log(col_means),y=log(col_sds)))+geom_point(size=0.8)+labs(x="log(Mean)",y="log(Standard deviation)",title = "Mean-variance relationship of gene expression (log scale)")+theme(plot.title = element_text(hjust = 0.5))
+```
+
+#### 1H): Interpretation.
+
+1)  The standard deviation of a gene measures how much of the expression
+    level of a gene "x" varies across the samples. A low standard
+    deviation indicates that the expression levels of that gene is
+    similar across all samples (rats), suggesting stable expression.
+    Whereas a high standard deviation indicates a strong variability in
+    gene expression between samples, this could reflect biological
+    differences between conditions , in this case :sex or training
+    period or differential gene regulation across rats.
+
+Since the dataset contains samples from different conditions, the
+standard deviation reflect mainly biological differences in gene
+expression between samples, rather than just technical variation/errors.
+
+2)  The scatterplot shows the relationship between the mean expression
+    and the standard deviation of each gene on a log scale. There is a
+    clear positive trend which indicates that those genes with higher
+    mean expression tend to have a higher variability across the
+    samples.This is a common feature of transcriptomics dataset and
+    indicates that variability in gene expression often increases with
+    expression level.
+
+Moreover, the plot also depicts that lowly expressed genes generally
+have low variability, while the highly ones span a wider range of
+standard deviations. This plot highlights that gene expression data are
+heteroscedastic, meaning that variability differs between genes, this is
+a pivotal aspect to take into account when applying statistical methods
+that assume equal variance.
+
+#### End of text block.
+
+#### 1I)
+
+```{r Assignment 1I, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+Alanine_levels<-df_metabolomics_Values|>
+  select(Alanine)|> 
+  mutate(Raw=Alanine,
+         Centered=Alanine-mean(Alanine),
+        `Centered and Scaled`=(Alanine-mean(Alanine))/sd(Alanine))|> ## 2/3
+  select(-Alanine)|>
+  pivot_longer(cols=3:1,values_to = "values",names_to = "processing")|>
+  mutate(
+    processing = factor(
+      processing,
+      levels = c("Raw", "Centered", "Centered and Scaled")
+    )
+  )
+
+
+## 4
+
+ggplot(Alanine_levels,aes(values, after_stat(density)))+geom_histogram(bins = 11,fill="grey",colour="black")+facet_wrap(~processing,scales="free")+labs(x="Alanine expression level",title= "Histograms for Alanine expression with different transformations")+theme(plot.title = element_text(hjust = 0.5))
+
+
+
+```
+
+#### 1J): Interpretation.
+
+1)  Centering substracts the mean of the variable from each sample,
+    hence shifting all values so that the average becomes zero, but the
+    differences between samples remain the same. This results in
+    positive and negative values indicating whether a sample has higher
+    or lower Alanine levels compared to the average.
+
+2)  When combining centering and scaling we standardize the data by
+    setting the mean to zero and the standard deviation to one. This
+    removes differences in the average level while preserving the
+    relative differences between samples and making the values
+    comparable, because after scaling, differences between samples are
+    expressed in units of standard deviation, which is useful when
+    comparing variables measured on different scales or when applying
+    multivariate statistical methods.
+
+The combination of meancentering and scaling by the standard deviation
+of each column in a matrix is often used in data analysis. It is known
+by different names, e.g. unit variance scaling, auto scaling,
+standardization. The standardized values are also known as z-scores.
+
+#### 1K)
+
+```{r Assignment 1K, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+## 1 
+sd_metabolomics<-tibble("sd"=apply(df_metabolomics_Values,2,sd))
+ggplot(sd_metabolomics,aes(sd,after_stat(density)))+geom_histogram(bins = 15,fill="grey",colour="black")+labs(x="Standard deviation of metabolites across samples",title="Distribution of metabolite standard deviation")+theme(plot.title = element_text(hjust = 0.5))
+```
+
+The histogram shows that metabolites differ considerably in their
+standard deviation across samples. Most metabolites have low
+variability, while a smaller subset shows much higher variability,
+resulting in a right-skewed distribution. This indicates a very
+different levels of variability across samples with some metabolites
+changing only slightly across samples whereas others show strong
+variation.
+
+This is one of the reasons why scaling is crucial, because by dividing
+each metabolite by its standard deviation ensures that all metabolites
+contribute equally to the analysis.
+
+
+### Assignment 2: Gene expression analysis (Douwe Molenaar, 6-01-2026)
+
+```{r load normalized gene expression data }
+df_transcriptomics_Filtered_Norm = read.csv("Blood_RNA_Normalized_C8_T8.csv", row.names = 1)
+```
+
+#### 2A)
+
+```{r Assignment 2A, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+df_transcriptomics_Filtered_Norm<-data.frame(t(df_transcriptomics_Filtered_Norm))|>
+  dplyr::select(-sex)
+```
+
+#### 2B)
+
+```{r Assignment 2B, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+
+
+#2
+# Make indices 
+control_group=row.names(df_transcriptomics_Filtered_Norm)[1:10]
+training_group=row.names(df_transcriptomics_Filtered_Norm)[11:20]
+
+#3
+sd_mean_per_gene<-df_transcriptomics_Filtered_Norm|>
+  mutate(Group=row.names(df_transcriptomics_Filtered_Norm))|>
+  mutate(Group = factor(ifelse(Group %in% control_group, "Control", "Training")))|>
+  pivot_longer(col=-Group,names_to = "Gene",values_to = "Value")|>
+  group_by(Gene,Group)|>
+  summarise(mean=mean(Value),sd=sd(Value))
+  
+#4
+# Plot the sd and mean with pseudolog transform due to the previous normalisation
+ggplot(sd_mean_per_gene,aes(x=mean,y=sd,colour=Group))+facet_wrap(~Group)+
+  geom_point(size=0.8,alpha=0.5) +
+ labs(title = "Mean-Variance relationship for log gene expression per group",x="Mean",y="Standard deviation")+theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(sd_mean_per_gene,aes(x=mean,y=sd,colour=Group))+
+  geom_point(size=0.8,alpha=0.5) +
+ labs(title = "Mean-Variance relationship for log gene expression",x="Mean",y="Standard deviation")+theme(plot.title = element_text(hjust = 0.5))
+```
+
+#### 2C: Interpretation
+
+#### Give your explanation and conclusion here (fixed)
+
+Interpretation 1) For homoscedastic data, the variance is constant, thus
+it does not vary with the mean expression level. In a mean-variance plot
+on a log-log scale (as shown in plot1 and 2) for control and training
+groups we would expect the data points to form a horizontal band, with
+the standard deviation being approximately constant across the entire
+range of mean expression values. Consequently we would not expect to
+observe a systematic trend between the mean and the variance.
+
+2)  Both plots (control and treatment) do not represent the expected
+    pattern for homoscedastic data. In both the control and training
+    groups, a clear mean-variance dependency is observed, characterized
+    by a steep positive relation for mean \< -1, followed by a negative
+    trend in which the standard deviation decreases as the mean
+    expression increases, leading to a heel-shaped pattern. This
+    indicates that the variance is not constant across expression
+    levels,and therefore the data are heteroscedastic.
+
+When comparing both groups, the control group shows a marginally more
+compact distribution of points, particularly at mid-range to high
+expression levels, suggesting a more stable variance structure.
+However,a clear dependence of variance on mean expression remains
+present. The general mean-variance relationship is shared by both
+groups, although minute differences in dispersion are observed.
+
+In general, the data are not homoscedastic.Instead, they reveal a strong
+mean-variance dependency, which is a typical feature of gene expression
+data. This highlights the need for statistical methods that explicitly
+account for heteroscedasticity in data analysis.
+
+In the next assignments we will apply tests to find genes related to
+training by comparing the control group with the group of rats that
+trained 8 weeks.
+
+#### 2D) 
+
+```{r Assignment 2D , include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+# Collect genes that have sd>0.1
+sd_genes<-apply(df_transcriptomics_Filtered_Norm,2,'sd')
+
+# Select these genes
+selected_genes_df<-df_transcriptomics_Filtered_Norm[,sd_genes>0.1]
+```
+
+#### 2E)
+
+```{r Assignment 2E , include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+
+# Select control and treatment groups for this gene
+control<-selected_genes_df$ENSRNOG00000000024[1:10]
+treatment<-selected_genes_df$ENSRNOG00000000024[11:20]
+
+#perform ttest
+t.test(control,treatment,var.equal=F)
+```
+
+#### 2F) Interpretation.
+#### Put any text for Interpretation 2F here.
+
+1)  The t-test evaluates whether the mean expression level of the gene
+    ENSRNOG00000000024 differs between the Control and Training groups.
+    More precisely, we have the following hypotheses:
+
+The null hypothesis (H0): The mean gene expression is equal in the
+control and training groups Alternative hypothesis (H1): The mean gene
+expression is different between control an training groups.
+
+2)  The obtained p-value (p=0.01292) represents the probability of
+    measuring the observed difference in mean gene expression, or a more
+    extreme difference, under the assumption that the null hypothesis is
+    true.
+
+3)  Since the p-value is less than the conventional significance
+    threshold of 0.05 we conclude that there is a mean difference
+    between both groups, as this p-value indicates that such a
+    difference is unlikely to have arisen by chance. However, when
+    considering multiple tests, it is important to recall that the false
+    discovery rate is a more robust measure of accuracy than a p-value.
+
+Since the obtained p-value is below the commonly used significance
+threshold of 0.05, the null hypothesis is rejected. Statistically, this
+suggests that the mean expression of ENSRNOG00000000024 differs between
+the control and training groups at 8 weeks.
+
+Moreover the sample means show that the gene has a higher average
+expression in the training group (mean=3.20) compared to the control
+group (mean=2.66). Furthermore, the 95% confidence interval for the
+difference in means (-0.94 to -0.12) does not include zero, reinforcing
+the conclusions that the observed difference it is statistically
+significant.
+
+This difference is corroborated by mechanistic knowledge, as this gene
+codes for the protein Hebp1; a heme binding protein ([Ensembl (Hebp1,
+Rattus
+norvegicus)](https://www.ensembl.org/Rattus_norvegicus/Gene/Summary?g=ENSRNOG00000000024;r=4:169705668-169735199;t=ENSRNOT00000000025 "Hebp1 gene in Rattus norvegicus (Ensembl)").
+According to UniProt, this protein "may bind free porphyrinogens that
+may be present in the cell and thus facilitate removal of these
+potentially toxic compounds"([Hebp1
+function](https://www.uniprot.org/uniprotkb/B4F7C7/entry#function "UniProt entry for Hebp1").)
+
+Overall, the results indicate that the expression of ENSRNOG00000000024
+is significantly altered by training, rather than the observed
+difference being due to random variation alone.
+
+#### End of text block.
+
+#### 2G)
+
+```{r Assignment 2G, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+
+# Computing all p-values
+p_values=apply(selected_genes_df,2,function (x) {
+  t.test(x[1:10],x[11:20])$p.value
+  }
+  )
+
+# Selecting the smallest p-value
+sort(p_values)[1]
+```
+
+#### Put any text for Interpretation 2G here.
+
+The smallest p-value obtained from the t-test is
+$p\approx3\times 10^{-6}$, corresponding to the gene
+"ENSRNOG00000005576". This extremely low p-value indicates very strong
+statistical evidence against the null hypothesis, meaning that the
+probability of observing such a difference of at least this size in gene
+expression, under the assumption that the null hypothesis is true, is
+extremely small. Therefore, this gene shows a highly significant
+difference in expression between the control and training groups at 8
+weeks.
+
+Nevertheless,a large number of genes were tested simultaneously, meaning
+that this result should be carefully interpreted . Since multiple
+testing increases the likelihood of false positives, appropriate
+multiple-testing correction methods, such as false discovery rate (FDR)
+correction, should be applied to verify the reliability of this finding.
+
+To this effect, we compare this statistical result to known literature
+of the gene, which codes for the enzyme Ribose-5-phosphate isomerase.
+This protein plays a role in cellular metabolism, through the pentose
+phosphate pathway [@b2024].
+
+#### 2H)
+
+```{r Assignment 2H, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+## make a dataframe of the p-values
+p_value_df<-data.frame(
+  Gene = names(p_values),
+  p_value = p_values
+)
+
+
+# Number of bins that we will use to find the number of positives
+nbins <- 40 
+
+#roughly 2800 positives
+
+# Setting the boundaries of the bins
+bin.breaks = seq(0, 1, by = 1/nbins)
+
+#creating the plot
+p<-ggplot(p_value_df,aes(p_value))+geom_histogram(breaks=bin.breaks)+theme(plot.title = element_text(hjust = 0.5))
+
+# adding the approximate null level of negatives
+null_level<-sum(p_value_df$p_value>=0.5)/sum(bin.breaks>0.5)
+
+p+geom_hline(yintercept =  null_level,colour="red")+geom_vline(xintercept=0.05,colour="green")+theme(plot.title = element_text(hjust = 0.5))+labs(x="p-value",title="Histogram of the gene-wise p-values")
+
+number_fp=null_level*nbins*0.05
+number_fp
+
+round(100*number_fp/sum(p_value_df$p_value<0.05),1)
+```
+
+#### Put any text for interpretation 2H here.
+
+1)  From the plot we see that there are roughly 2750 positives: the
+    first two bins (left of the green line marking the 0.05 p-value
+    threshold) contain \~2000 and \~750 respectively.
+
+2)  To compute the approximate number of false positives, we estimated
+    the amount of negatives per bin by averaging the tail with p-value
+    0.5 and up. This null level (shown in the plot in red) was then
+    multiplied by 2, the number of bins with a p-value less than 0.05.
+    This yields an estimated number of false positives of 481, an FDR of
+    around 17,3%. This section of tests is represented in the graph by
+    the area below the red line and left of the green line.
+
+#### End of text block.
+
+#### 2I)
+
+
+```{r Assignment 2I, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+control_mean<-sd_mean_per_gene|>
+  filter(Group=="Control")|>
+  dplyr::select(Gene,mean)|>
+  filter(Gene %in% colnames(selected_genes_df))
+  
+
+
+training_mean<-sd_mean_per_gene|>
+  filter(Group=="Training")|>
+  dplyr::select(Gene,mean)|>
+  filter(Gene %in% colnames(selected_genes_df))
+
+FC<-data.frame("Gene"=colnames(selected_genes_df),"FC"=training_mean$mean-control_mean$mean)
+```
+
+#### 2J)
+
+```{r Assignment 2J, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+# Calculate adjusted p-values
+p_value_adjusted_df<-p_value_df|>
+  mutate(p_adjusted=p.adjust(p_value,"fdr"))|>
+  left_join(FC)|>
+  mutate(Diff_Exp=ifelse(abs(FC)>1& p_adjusted<0.05,"Differential","Identical"))
+# Make Volcano plot
+plot<-ggplot(p_value_adjusted_df,aes(x=FC,y= 1/p_adjusted ))+
+  labs(x="Log fold-change of gene expression",y="(adjusted p-value)^-1",title = "Volcano plot of differential gene expression",colour="Gene expression")+theme(plot.title = element_text(hjust = 0.5))
+points<-geom_point(size=0.5,alpha=0.5)
+plot+points
+# set thresholds and find differentially expressed genes
+p_threshold<-0.05
+FC_threshold=1
+
+plot+geom_point(size=0.8,alpha=0.6,aes(colour=Diff_Exp))+
+  geom_hline(yintercept = 1/p_threshold, col='red', linetype="dashed") +
+  geom_vline(xintercept = c(-FC_threshold,FC_threshold), col='gray') +
+  annotate("text", x=2.4, y=1/0.044, label="p-value < 0.05") +
+  annotate("text", x=c(-1.5,1.5), y=c(51,51), label=c("log(FC) < -1", "log(FC) > 1"))+
+  scale_color_manual(
+    values = c(
+      "Differential" = "red",
+      "Identical" = "black"
+    )
+  )+
+  labs(x="Log fold-change of gene expression",y="(adjusted p-value)^-1",title = "Volcano plot of differential gene expression",colour="Gene expression")+theme(plot.title = element_text(hjust = 0.5))
+
+p_value_adjusted_df|>
+  filter(p_adjusted==min(p_adjusted))|>
+  filter(abs(FC)==max(abs(FC)))|>
+  pull(Gene)
+```
+
+#### Put any text you may want to type here.
+
+#### End of text block.
+
+#### 2K) Interpretation.
+
+1)  Controlling type I error using the false discovery rate (FDR) means
+    limiting the expected proportion of false positives among all genes
+    declared significant ,rather than controlling the probability of
+    making at least one false positive error.
+
+In genome-wide expression analyses, where thousands of statistical tests
+are performed simultaneously,some false positives are unavoidable. FDR
+control offers a more appropriate correction than other methods such as
+Bonferroni, allowing the identification of truly differentially
+expressed genes while keeping the proportion of false discoveries at an
+acceptable level. Hence, using FDR ensures a balance between statistical
+reliability and biological relevance in large-scale genomic analyses.
+
+2)  The most important gene (based on lowest p-value first and highest
+    absolute fold change second) is called Gpr4 and is hypothesised to
+    function as a pH signaling protein. Through activation of G Protein
+    coupled receptors (GPCRs), it mediates the cellular response to
+    extracellular acidity, and is thought to be involved in the
+    development of blood vessels . This would explain its upregulation
+    in the training cohort, corroborating the statistical results above
+    ([RGD (Gpr4
+    gene)](https://rgd.mcw.edu/rgdweb/report/gene/main.html?id=1311604 "Gpr4 gene annotation in the Rat Genome Database")).\
+
+### Assignment 3: Principal Component Analysis (Gustavo Stolf Jeuken, 8-01-2026)
+#### 3A)
+
+```{r Assignment 3A, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(ggrepel)
+#0 
+metabolomics_Exp<-read.csv("df_metabolomics_Exp.csv",row.names=1)
+metabolomics_Values<-read.csv("df_metabolomics_Values.csv",row.names=1)
+
+#Creating variable for control vs training
+metabolomics_Exp<-metabolomics_Exp|>
+  separate(Groups,"Treatment"," ",remove = FALSE)|>
+  mutate(Treatment=factor(Treatment))
+  
+# Mean-centering/scaling the data
+metabolomics_Values_norm<-apply(metabolomics_Values,2,function(x){(x-mean(x))})
+
+# Running PCA and defining scores & loadings
+pca<-svd(metabolomics_Values_norm)
+scores= as_tibble(pca$u %*%diag(pca$d))
+loadings= as_tibble(pca$v)
+
+
+
+
+#2
+# Defining a factor for the groups for the plot colouring
+groups=factor(metabolomics_Exp$Groups)
+
+scores$Groups<-groups
+
+# Plotting the first two scores with ggplot2 as it adds a nice legend for 5
+score_plot<-ggplot(scores,aes(x=V1,y=V2,colour=Groups))+geom_point()
+
+
+#3
+# Computing total ssq 
+totalssq<-sum(metabolomics_Values_norm*metabolomics_Values_norm)
+
+# Computing the explained variance
+ssq <- 100 * pca$d^2 / totalssq
+
+cumssq<-cumsum(ssq)
+cumssq
+round(ssq[1:2],2)
+
+
+#4
+score_plot_grp<-score_plot+labs(x="PC1 (41.1% variance)",y="PC2 (7.2% variance)",
+                                title="Score plot of samples for the first to PCs coloured by group")+
+  theme(plot.title = element_text(hjust = 0.5))
+#5
+#Added already by ggplot
+#6
+  
+scores$Sex<-factor(metabolomics_Exp$Rat.Sex, labels=c('Female', 'Male'))
+
+score_plot_sex<-ggplot(scores,aes(x=V1,y=V2,colour=Sex))+
+  geom_point()+
+  labs(x="PC1 (41.1% variance)",y="PC2 (7.2% variance)",
+       title="Score plot of samples for the first to PCs coloured by sex")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+score_plot_grp
+
+score_plot_sex
+```
+
+
+#### 3B: Interpretation.
+
+#### Put any text for Interpretation 3B here.
+
+1)  There is a clear distinction between male and female rats along PC1,
+    which contributes 41.1% of the variance, where the males have a
+    higher PC1 value than average and females lower than average.
+
+Along PC2 which contributes 7.2% of the variance, we observe a decrease
+in PC2 as time progresses in the training cohort. both in the male and
+female population. We further note that the control subjects also fall
+on the lower end of the PC2 spectrum, around the value of the rats that
+have trained 2-4 weeks.
+
+All in all, the dominant source of variation appears to be the sex of
+the rat.
+
+2)  One might speculate that initiation of the training regimen induces
+    a positive change in metabolites along the PC2 axis, which
+    stabilizes to a lower level after 8 weeks. Without data on the
+    controls at different time points, it is impossible to check whether
+    the gradient observed in the training cohort is an effect of age,
+    and whether the decrease in PC2 would occur regardless of training.
+
+The substantial overlap between control and training samples combined
+with the relatively low explained variance of 7.2% indicates that
+training does not induce a strong global shift in the metabolomics
+profiles. Any training-related effects are therefore likely limited to a
+small subset of metabolites and do not contribute substantially to the
+major sources of variation captured by the first two principal
+components.
+
+#### End of text block.
+
+#### 3C: Loading plot.
+
+```{r Assignment 3C Loading plot, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+
+#1 
+
+loadings_imp<-loadings|>
+  mutate(Importance=sqrt(loadings[,1]^2+loadings[,2]^2),
+         Metabolite=colnames(metabolomics_Values))
+#2
+loadings_imp<-loadings_imp|>
+  arrange(desc(Importance))|>
+  slice(1:30)
+
+#3
+library(ggrepel)
+
+
+ggplot(loadings_imp,aes(x=V1,y=V2,label=Metabolite))+geom_jitter()+geom_text_repel(size = 3)+labs(x="PC1 (41.1% variance)",y="PC2 (7.2% variance)",title="PCA loadings plot (30 metabolites)")+theme(plot.title = element_text(hjust = 0.5))
+```
+
+#### 3D) Interpretation
+
+1)  As noted above, we observed that training had the most effect along
+    the PC2 variable, with increasing training time corresponding to a
+    decrease in PC2. The metabolites showing relatively low loadings on
+    PC2 include serotonin, taurochenodeoxycholate, hyodeoxycholate and
+    sphingosine. These metabolites therefore seem to increase with
+    training time. These compounds are biologically plausible candidates
+    for training-related effects. Physical training is known to
+    influence energy metabolism, lipid signaling and gut–liver axis
+    activity, which can affect bile acid composition and sphingolipid
+    metabolism[@starnes2017]. In addition, serotonin plays a role in
+    metabolic regulation and exercise-induced adaptations, particularly
+    through its involvement in energy balance and peripheral signaling
+    [@pietrelli2018] .
+
+The presence of these metabolites among the most influential
+contributors to PC2 is consistent with a modest but biologically
+meaningful metabolic response to training, even though training does not
+dominate the overall variance structure of the data.
+
+2)  Metabolites with high loadings on PC1 include cholate, glycocholate,
+    sphingomyelin and several triglyceride species. Since males tend to
+    score higher along PC1 in comparison to females, this suggests that
+    these metabolites occur more prevalently in males. These metabolites
+    are closely linked to lipid metabolism, bile acid synthesis and
+    lipid transport, processes that are well known to differ between
+    males and females due to hormonal regulation[@quiróscognuck2020].
+    Sex-specific differences in steroid hormones influence bile acid
+    pools and lipid composition, which can explain the strong separation
+    observed along PC1[@dimitriadis2019]. The prominence of
+    triglycerides and sphingolipids among these metabolites supports the
+    conclusion that sex-related biological differences are the dominant
+    drivers of variation in the metabolomics data.
+
+#### End of text block.
+
+#### 3E)
+```{r Assignment 3E, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+
+scores<-scores[1:50] # Removing the group and sex variable used for plotting
+
+reconstructed_metabolomics<-as.matrix(scores[,1:2])%*%t(as.matrix(loadings[,1:2])) #Reconstructing matrix
+
+residuals<-metabolomics_Values_norm-reconstructed_metabolomics #Computing residuals
+
+res_ssq<-sum(residuals^2) #Computing the residual ssq
+
+exp_ssq<- sum(pca$d[1:2]^2)
+# Computing the absolute explained ssq (not a percentage as above)
+
+round(res_ssq+exp_ssq-totalssq, 4) # comparing sum of explained and residual ssq to the total ssq, difference is 0 showing they are equal
+```
+
+#### 3F)
+```{r Assignment 3F, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+#1
+squared_residual_samples<-data.frame("Sex"=factor(metabolomics_Exp$Rat.Sex,label=c("female","male")), 
+                                     "Name"=row.names(metabolomics_Exp),
+                                    "ssq"=rowSums(residuals^2))
+
+ggplot(squared_residual_samples, aes(x=Name,y=ssq,fill=Sex))+
+  geom_col()+
+  coord_flip()+
+  theme(axis.text.y=element_text(size = 5),
+        plot.title = element_text(hjust = 0.5))+
+  labs(x="Sample ID",y="Residual sum of squares",title="Barplot of the residual sum of squares per individual")
+
+#2
+squared_residual_metab<-data.frame("Metabolite"= colnames(residuals),"ssq"=colSums(residuals^2))
+
+ggplot(squared_residual_metab, aes(x = Metabolite, y = ssq)) +
+  geom_col()+
+  labs(
+    x = "Metabolite",
+    y = "Residual sum of squares",
+    title = "Barplot of the residual sum of squares per metabolite"
+  ) +
+  theme(
+    axis.text.x  = element_blank(),
+    axis.ticks.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+  )
+
+```
+
+#### 3G
+#### Put any text you may want to type here.
+
+We find that the rat with ID 90254 has the greatest residual variation.
+For this rat the edetate.1 metabolite is found to be the biggest
+contributor to the unexplained variance.
+
+If we define the best modeled variable as the one with the highest %
+explained variation, we find that our model with two PCs has
+PC.O.32.1.\_feature3 as the best modeled variable. It has an explained
+sum of squares of 96.9%, thus being modeled very well.
+
+```{r 3G, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+squared_residual_samples|>
+  arrange(desc(ssq))|>
+  select(-Name)|>
+  slice(1)
+# Find the rat with the highest residual ssq
+
+sort(abs(residuals["90254",]),decreasing = TRUE)[1] # Find the metabolite with the highest contribution to the residual ssq for this rat
+
+## Compute variance per metabolite and residual variance
+total_ssq_per_metabolite<-colSums(metabolomics_Values_norm^2)
+res_ssq_per_metabolite<-colSums(residuals^2)
+
+percent_ssq_metabolite<-sort(100*(total_ssq_per_metabolite- res_ssq_per_metabolite)/total_ssq_per_metabolite,decreasing = TRUE)
+
+percent_ssq_metabolite[1]
+
+```
+
+### Assignment 4: Clustering (Gustavo Stolf Jeuken, 13-01-2026)
+
+#### 4A)
+
+```{r Assignment 4A, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+metabolomic_values<-read.csv("df_metabolomics_Values.csv",row.names = 1)
+metabolomic_exp<-read.csv("df_metabolomics_Exp.csv",row.names = 1)
+```
+
+#### 4B)
+
+```{r Assignment 4B, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+# standardising the data
+metabolomic_values<-apply(metabolomic_values,2,function(x){(x-mean(x))/sd(x)})
+
+#computing euclidean distance between the samples
+l2_distance<-dist(metabolomic_values)
+
+l2_hclust<-hclust(l2_distance,method="average")
+
+metabolomic_exp<-metabolomic_exp|>
+  mutate(
+    Rat.Sex=factor(Rat.Sex,label=c("F","M")),
+    Experiment.Group=factor(Experiment.Group)
+    )
+
+plot(l2_hclust,labels=metabolomic_exp$Rat.Sex,cex=0.6,
+     xlab="Sex",main="Dendogram labeled by sex (average linkage)",ylab="Distance")
+
+plot(l2_hclust,labels=metabolomic_exp$Groups,cex=0.6,
+     xlab="Experiment Group",main="Dendogram labeled by experiment group (average linkage)",ylab="Distance")
+
+```
+
+#### Put any text you may want to type here.
+
+Hierarchical clustering was performed on the centered and scaled
+metabolomics data using Euclidean distances.The following section
+provides an interpretation of the clustering results based on sex and
+experimental group, and compares them with the PCA outcome.
+
+#### End of text block.
+
+#### 4C) Interpretation.
+
+#### Put any text for interpretation 4C here.
+
+1)  In the first plot, when samples are labeled by sex, the hierarchical
+    clustering shows a clear separation, with samples of the same sex
+    clustering together. This indicates that sex is a major source of
+    variation in the metabolomics data.
+
+In contrast, when samples are labeled by experimental group, the
+clustering does not exhibit a clear separation between Control and
+Training groups, although the subjects with 1-2 weeks of physical
+training are clustered together. The samples from the remaining groups
+are intermixed, suggesting that sex has a stronger effect (explains more
+variation) than experimental groups.
+
+2)  Hierarchical clustering and PCS approach the data from different
+    perspectives. Hierarchical focuses on pairwise similarities between
+    samples and represent them into a dendogram, making it easier to see
+    which samples are most similar to each other. Whereas PCA summarizes
+    the main sources of variation in the data by projecting samples onto
+    a small number of principal components (PC1 and PC2).
+
+In our dataset, both methods lead to consistent conclusions. PCA shows a
+clear separation by sex along the first principal component, while
+experimental groups largely overlap. Hierarchical clustering reflects
+the same pattern, with samples clustering primarily by sex and
+secondarily byu training time. However, PCA provides a clearer visual
+separation of the dominant effect (Sex), whereas hierarchical clustering
+highlights the lack of distinct group-based clusters,whereas
+hierarchical cluster requires deciding a number of clusters.
+
+#### End of text block.
+
+#### 4D)
+
+```{r Assignment 4D, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+met_subset<-metabolomic_values[,1:36]
+
+met_dist<-dist(t(met_subset))
+met_clust<-hclust(met_dist,method="average")
+
+plot(met_clust,labels = abbreviate(colnames(met_subset),minlength = 7),cex=0.6,main="Dendogram of 36 amine metabolites (average linkage)",ylab="Distance")
+```
+
+#### Put any text you may want to type here.
+
+Dendogram interpretation: The hierarchical clustering of the first 36
+amine metabolites reveals several well-defined sub-clusters, indicating
+groups of metabolites that show similar changes across samples. Closely
+related amino acids, such as branched-chain amino acids (e.g. leucine
+and isoleucine), cluster together at low Euclidean distances, reflecting
+a high degree of similarity in their behaviour. Several metabolites form
+tight sub-clusters, suggesting that they vary in a highly similar way
+across the dataset, which may point to shared biochemical pathways or
+coordinated regulation. In contrast, metabolites that only merge at
+higher distances show less similar patterns across samples, indicating
+more independent behaviour. \#### End of text block.
+
+#### End of text block.
+
+#### 4E)
+
+```{r Assignment 4E}
+# Select isoleucine and leucine
+ggplot(metabolomic_values,aes(x=Isoleucine,y=Leucine))+geom_point()+geom_smooth(method="lm",se=F)+labs(title = "Scatter plot of Leucine vs Isoleucine plasma levels")
+
+# Select alanine and proline
+ggplot(metabolomic_values,aes(x=Alanine,y=Proline))+geom_point()+geom_smooth(method="lm",se=F)+labs(title = "Scatter plot of Proline vs Alanine plasma levels")
+
+
+```
+
+#### Put any text for interpretation of 4E2 here.
+
+Clustering samples is mainly used to understand how experimental
+conditions relate to each other and which factors drive differences
+between individuals. In this dataset, clustering samples helped reveal
+that sex explains a large part of the variation, while training and
+control groups are less clearly separated. This type of clustering is
+therefore useful for interpreting biological or experimental effects at
+the sample level.
+
+Clustering metabolites, on the other hand, focuses on how variables
+behave across all samples. It allows the identification of metabolites
+that change in a similar way, which can indicate shared biochemical
+functions or coordinated regulation. While sample clustering answers
+questions about group separation, metabolite clustering provides insight
+into relationships between metabolites themselves and underlying
+metabolic structure.
+
+#### End of text block.
+
+#### 4F)
+
+
+```{r Assignment 4F, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+set.seed(123)
+# 2 cluster k-means
+k2 <- kmeans(metabolomic_values,2)
+
+
+
+
+table(k2$cluster,abbreviate(metabolomic_exp$Groups,minlength = 14))
+
+table(k2$cluster,metabolomic_exp$Rat.Sex)
+
+set.seed(123)
+# 5 cluster k-means
+k5 <- kmeans(metabolomic_values,5)
+
+table(k5$cluster,abbreviate(metabolomic_exp$Groups,minlength = 14))
+
+# Amine clustering
+set.seed(123)
+k_met<-kmeans(t(met_subset),3)
+
+
+split(rownames(t(met_subset)),k_met$cluster)
+```
+
+#### Put any text you may want to type here.
+
+In the hierarchical clustering of the first 36 amines (4D), the
+metabolites do not form just one or two large groups. Instead, the
+dendrogram shows several clear branches, with 3 main groupings and
+smaller sub-groups within them. Because of this structure, using only 2
+clusters would be too simplistic and would combine metabolites that show
+clearly different patterns. For this reason, we decided on using k=3 for
+the clustering.
+
+#### End of text block.
+
+#### 4G) Interpretation.
+
+#### Put any text you may want to type here.
+
+1)  The k-means clustering of samples shows that experimental groups are
+    not cleanly separated into distinct clusters. With k = 2, samples
+    from all experimental conditions are distributed across both
+    clusters, indicating that the clustering is not driven by group or
+    training duration. We checked if the k-means algorithm was
+    classifying based on sex, which is shown to be the case in the
+    second table.
+
+    Increasing the number of clusters to k = 5 reveals more structure,
+    with some clusters containing higher proportions of specific
+    training durations. However, control and training samples are still
+    mixed across multiple clusters. Overall, the results suggest that
+    while k-means captures variability within the data, experimental
+    condition alone does not fully explain the clustering patterns.
+
+2)  The k-means clustering and PCA results are largely consistent with
+    each other. PCA shows a very clear separation by sex along the first
+    principal component, indicating that sex is a major source of
+    variation in the metabolomics data. We observe this clustering based
+    on sex in the k-means clustering with k=2, where there is a perfect
+    sex classification of the subjects.
+
+    When samples are coloured by experimental group, the PCA shows
+    overlap between control and training samples, with an increase in
+    training time corresponding to a decrease along PC2. We observe that
+    subjects with 1-2 weeks of training score significantly higher along
+    PC2 in both males and females. While k-means identifies some
+    internal structure in the data, it does not produce clusters that
+    correspond clearly to experimental conditions, which shows, again,
+    the overlap observed in the PCA plots. Clusters 2 and 3 are
+    predominantly occupied by the samples undergoing training for 1-2
+    weeks. We can also highlight these subjects have been evenly split
+    between clusters 2 and 3, suggesting a sex difference.
+
+    Overall, PCA highlights the dominant sources of variation in a
+    low-dimensional representation, whereas k-means assigns samples to
+    distinct clusters. Both approaches lead to the same conclusion:
+    experimental group effects are weaker than sex-related differences
+    and do not drive a clear separation of samples. In both methods we
+    can observe a separation between 1-2 weeks of training and the other
+    conditions.
+
+3)  Hierarchical clustering and k-means show consistent overall patterns
+    but differ in how they represent structure in the data. Hierarchical
+    clustering highlights progressive similarity relationships between
+    samples and reveals that samples tend to cluster more strongly by
+    sex than by experimental group . In contrast, k-means forces samples
+    into a predefined number of clusters, which results in mixed
+    clusters containing samples from multiple experimental conditions.
+
+    While hierarchical clustering provides a clear overview of how
+    samples relate to each other at different similarity levels, k-means
+    produces a fixed clustering that depends on the chosen number of
+    clusters. Despite these methodological differences, both approaches
+    lead to the same conclusion: controls and training groups are not
+    clearly separated at 8 weeks, although the 1-2 week training cohort
+    are clustered together. Moreover, sex-related differences appear to
+    be a more dominant source of variation.
+
+#### End of text block.
+
+#### 4H) UMAP.
+
+
+```{r Assignment 4H, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+# Sanple UMAP
+set.seed(123)
+custom.config.sample <- umap.defaults
+custom.config.sample $n_neighbors <- 3
+
+umap.sample<-umap(metabolomic_values,custom.config.sample)
+
+umap.sample.coord<-data.frame(umap.sample$layout)|>
+  mutate(group=metabolomic_exp$Groups,
+         sex=metabolomic_exp$Rat.Sex)
+
+sampleplot_group<-ggplot(umap.sample.coord,aes(x=X1,y=X2,colour=group))+geom_point()+labs(title="UMAP plot of samples coloured by group (3 neighbours)")
+
+sampleplot_sex<-ggplot(umap.sample.coord,aes(x=X1,y=X2,colour=sex))+geom_point()+labs(title="UMAP plot of samples coloured by sex (3 neighbours)")
+
+sampleplot_group
+sampleplot_sex
+
+
+# Sanple UMAP per sex
+set.seed(123)
+custom.config.sample <- umap.defaults
+custom.config.sample $n_neighbors <- 3 # 3,4 works well
+
+
+#Extra option for plotting males and females seperately
+males<-tibble(metabolomic_values[metabolomic_exp$Rat.Sex=="M",])
+
+
+females<-tibble(metabolomic_values[metabolomic_exp$Rat.Sex=="F",])
+
+umap.m<-umap(males,custom.config.sample)
+umap.m.coord<-data.frame(umap.m$layout)|>
+  mutate(Group=metabolomic_exp$Groups[metabolomic_exp$Rat.Sex=="M"])
+
+umap.f<-umap(females,custom.config.sample)
+umap.f.coord<-data.frame(umap.f$layout)|>
+  mutate(Group=metabolomic_exp$Groups[metabolomic_exp$Rat.Sex=="F"])
+
+
+mplot<-ggplot(umap.m.coord,aes(x=X1,y=X2,colour=Group))+geom_point()+labs(title = "UMAP plot of male samples")
+fplot<-ggplot(umap.f.coord,aes(x=X1,y=X2,colour=Group))+geom_point()+labs(title = "UMAP plot of female samples")
+
+mplot/fplot
+
+# Metabolite UMAP
+set.seed(12)
+custom.config.met <- umap.defaults
+custom.config.met $n_neighbors <- 6
+
+umap.met<-umap(t(met_subset),custom.config.met)
+
+umap.met.coord<-data.frame(umap.met$layout)
+
+metplot<-ggplot(umap.met.coord,aes(x=X1,y=X2))+geom_point()+labs(title="UMAP plot of amine metabolites (6 neighbours)")
+
+#install(patchwork)
+
+metplot
+
+
+
+```
+
+#### Put any text you may want to type here.
+
+1)  UMAP is designed to preserve local neighbourhood relationships while
+    still providing a meaningful global representation of the data. With
+    very small numbers of neighbours, the embedding focuses on local
+    relationships, which leads to very tight and exagerated clusters.
+    With larger values, local structure becomes less dominant and the
+    separation between groups starts to clearly separated. For the
+    sample clustering, 3 neighbours ended up matching expectations from
+    PCA and the previous clustering algorithms the best.
+
+2)  For the metabolites, using 6 neighbours provides a good balance
+    between both extremes: metabolites that behave similarly are placed
+    close together, while the overall structure remains easy to
+    interpret. For this reason, the UMAP result with 6 neighbours was
+    selected. There is also correspondence between metabolites that lie
+    closely together in the UMAP, and those that are clustered together
+    in the hierarchical clustering.
+
+#### End of text block.
+
+#### 4I) Interpretation.
+
+#### Put any text you may want to type here.
+
+1.   The UMAP representation of the samples shows a very clear
+    separation by sex, with male and female samples forming two
+    well-defined groups. This indicates that sex is a major source of
+    variation in the metabolomics data. Furthermore, within both sexes
+    we observe clustering, although there is no clear distinction
+    between control and treatment group. We do observe a clear cluster
+    subjects with 1-2 weeks training, particularly in the female
+    population. The fact that the clusters do contain a mixture of
+    treatment groups suggests that training status or duration has a
+    weaker effect on the overall metabolic profile. Overall, the UMAP
+    results confirm that sex-related differences dominate the sample
+    structure.
+
+<!-- -->
+
+2.  The UMAP analysis of the amine metabolites reveals groupings that
+    are consistent with both k-means and hierarchical clustering.
+    Metabolites that were grouped together in the dendrogram and in
+    k-means clustering also tend to appear close to each other in the
+    UMAP plot. This suggests that these metabolites share similar
+    patterns across samples. While UMAP does not assign metabolites to
+    strict clusters, it provides a complementary view that supports the
+    same overall relationships identified by the other clustering
+    methods. This suggest a entangled relationship between the
+    metabolites rather than a discrete clustering.
+
+<!-- -->
+
+3.  UMAP differs from k-means and hierarchical clustering in that it is
+    primarily a visualisation method rather than a clustering algorithm.
+    It focuses on representing similarities between points in a
+    low-dimensional space, making patterns and groupings easier to
+    observe. In contrast, k-means and hierarchical clustering explicitly
+    assign samples or metabolites to clusters. In this dataset, UMAP is
+    particularly useful for highlighting dominant patterns, such as the
+    strong separation by sex.
+
+#### End of text block.
+
+#### This concludes Assignment 4.
+
+Make sure you save your .Rmd file and workspace so you can continue in
+your next project session.
+
+### Assignment 5: Classification (Johan Westerhuis, 15-01-2023)
+
+In this assignment we will use the LDA and PCDA methods to find the
+metabolites that best discriminate between Control and 8 weeks training
+conditions.\
+
+#### 5A)
+
+```{r Assignment 5A, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+# 0
+metabolomic_values<-read.csv("df_metabolomics_Values.csv",row.names = 1)
+metabolomic_exp<-read.csv("df_metabolomics_Exp.csv",row.names = 1)
+
+# 1
+reduced_idx <- which(metabolomic_exp$Experiment.Time == "8 weeks")
+
+reduced_values<-metabolomic_values[reduced_idx,]
+reduced_exp<-metabolomic_exp[reduced_idx,]
+   
+# 2 
+reduced_values<-reduced_values|>
+  dplyr::select(80:613)
+# 3      
+reduced_values<-as.data.frame(scale(reduced_values))
+
+
+# 4
+condition<-reduced_exp|>
+  mutate(condition=factor(ifelse(Experiment.Group=="Control",0,1),labels=c("Control","Treatment")))|>
+  pull(condition)
+
+
+```
+
+#### Put any text you may want to type here.
+
+#### End of text block.
+
+#### 5B)
+
+```{r Assignment 5B, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+lda_results<-lda(reduced_values,condition)
+
+d_lda<-lda_results$scaling
+
+
+```
+
+#### 5C) Interpretation.
+
+#### Put any text for Interpretation 5c here.
+
+The warning says that "variables are collinear." This indicates that
+some variables are highly correlated and can be written as linear
+combinations of other variables. This is expected in lipid metabolomics
+data for two reasons. In lipid metabolomics many metabolites belong to
+the same biochemical pathways or lipid classes and therefore show
+similar behavior across samples. Moreover, this type of data usually has
+many more variables than observations. These factors causes the
+covariance matrix to not be full rank, leading to collinearity.
+
+Collinearity does not prevent LDA from running, but it means that the
+discriminant direction is not unique and may depend on a subset of
+correlated variables.
+
+#### End of text block.
+
+#### 5D)
+
+```{r Assignment 5D, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+# PCA
+met_svd<-svd(reduced_values,nu=3,nv=3)
+scores = as.data.frame(met_svd$u %*%diag(met_svd$d[1:3]))
+loadings = as.data.frame(met_svd$v)
+
+scores_plot<-scores|>
+  mutate(Group=condition)
+
+totalssq<-sum(reduced_values^2)
+ssq_explained <- 100 * met_svd$d^2 / totalssq
+# scoreplot PC1 vs PC2
+PC12<-ggplot(scores_plot,aes(x=V1,y=V2,colour=Group))+geom_point()+labs(x="PC1 (50.2% variance)",y="PC2 (12.6% variance)",title="PC1 vs PC2")+theme(plot.title = element_text(hjust = 0.5))
+# scoreplot PC2 vs PC3
+PC23<-ggplot(scores_plot,aes(x=V2,y=V3,colour=Group))+geom_point()+labs(x="PC2 (12.6% variance)",y="PC3 (7.8% variance)",title="PC2 vs PC3")+theme(plot.title = element_text(hjust = 0.5))
+
+# Plot together 
+PC12+PC23+plot_layout(guides = "collect") &
+  theme(legend.position = "right")
+
+
+#3
+
+mean_ctr<-apply(scores[condition=="Control",],2,mean)
+mean_trt<-apply(scores[condition=="Treatment",],2, mean)
+
+mean_diff<-mean_ctr-mean_trt
+
+p_values=apply(scores[condition=="Control",]-scores[condition=="Treatment",],2, function(x) {"p-value"=t.test(x)$p.value})
+
+data.frame(mean=mean_diff,"p-value"=p_values)
+
+# We visually see the biggest difference between control and treatment is along 
+# PC3. We confirm this by computing the difference of means between the treatment groups per principle component.The results corroborate the visual observation that PC3 is the most useful component for classification. 
+```
+
+#### 5D Interpretation:
+
+We visually see that the PC2 vs PC3 plot reveals a clear separation
+along the PC3 axis. From the two groups tend to occupy different regions
+of the plot, suggesting that PC3 captures variation related to the
+experimental conditions.
+
+We confirm this by computing the difference of means between the
+treatment groups per principle component. We observe that PC3 has the
+biggest mean difference between the conditions (7.55), as well as the
+lowest p-value (0.02). These results corroborate the visual observation
+that PC3 is the most useful component for classification.
+
+#### 5E)
+
+```{r Assignment 5E, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+# Run lda on first 3 PCs (PCDA)
+PCDA_res<-lda(scores,condition)
+
+# Compute the discriminant vector and the regression coefficients for each metabolite
+d_PCDA<-PCDA_res$scaling
+coef_PCDA<-as.matrix(loadings)%*%d_PCDA
+
+names(coef_PCDA)<-colnames(reduced_values)
+
+
+# Find most important metabolites
+names(sort(abs(coef_PCDA),decreasing = T)[1:5])
+
+#Compute prediction
+pred<-factor(ifelse(as.matrix(reduced_values)%*%coef_PCDA<0,"Control",'Treatment'))
+
+# Compute no. misclassifications
+data.frame(condition,pred)[condition!=pred,] # 3 misclassification
+
+table(Truth=condition,Prediction=pred)
+
+```
+
+#### Misclassification
+
+We find that the most important 5 metabolites in descending order of
+effect size are LPC.18.2.0.0.\_feature2, PC.30.0.\_feature2,
+LPC.20.3.\_feature1and2, LPC.17.1.0.0.\_feature2 and PC.35.3.\_feature1.
+
+The PCDA classifier model misclassifies 3 samples: we see in the
+confusion 1 control gets classified as being in the treatment group and
+2 treatment group samples get mistakenly classified as a control sample,
+as can be seen in the confusion matrix. Counting the treatment group as
+positive and the controls as negative, we then get a false positive rate
+of 10% and a false negative rate of 20%.
+
+#### End of text block.
+
+#### 5F) Interpretation.
+
+#### Put any text for interpretation 5F here.
+
+An important thing to note is that PCA is a step in the process of PCDA.
+They are therefore intimately related, although the PCA on its own
+serves a very different purpose: it finds direction vectors that explain
+the maximal amount of variance in the sample space. PCDA, on the other
+hand, uses PCA as a means of dimensionality reduction, to then perform
+an LDA in the lower dimensional space of the first $n$ PCs. This then
+yields a discriminant vector, that is a vector $d$ maximising the ratio
+$\frac{d^{\intercal}Bd}{d^{\intercal}Wd}$, where $B$ and $W$ are the
+between group and within group covariance matrices, respectively. This
+can be interpreted as maximising the level of separation of the two
+groups.
+
+When performing a multitude of t-tests to make a Volcano plot, we are
+testing the effects of each metabolite (or variable in general) on the
+response separately. Contrarily, in PCDA and LDA the discriminant vector
+is a linear combination of the metabolite concentrations detected, and
+the weights of this combination indicate the effect of that metabolite.
+This is an important difference for a number of reasons. Firstly, the
+Volcano plot approach suffers from the multiple testing problem and
+requires corrections (such as FDR control) accordingly, while PCDA only
+requires one test. Secondly, it is possible that no single metabolite
+has a very strong effect, while a combination of metabolite levels has
+much stronger predictive power. In this case there will be few important
+metabolites in the Volcano plot, while the discriminant vector can pick
+up on this combined effect.
+
+#### End of text block.
+
+### Assignment 6: ASCA (Johan Westerhuis, 16-01-2026)
+
+```{r}
+#install.packages("mixlm")
+#install.packages("HDANOVA") 
+
+library(mixlm)
+library(HDANOVA)
+```
+
+#### 6A)
+
+#### Add code for figures here
+
+```{r Assignment 6A, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(ggrepel)
+
+## Loading the data
+metabolomic_values<-read.csv("df_metabolomics_Values.csv",row.names = 1)
+metabolomic_exp<-read.csv("df_metabolomics_Exp.csv",row.names = 1)
+
+# Selecting lipids
+reduced_values<-metabolomic_values|>
+  dplyr::select(80:613)
+
+raw_sd_mean<-data.frame(mean=apply(reduced_values,2,mean),
+                        sd=apply(reduced_values,2,sd))
+
+set.seed=12
+sel<-sample(seq_len(ncol(reduced_values)),25)
+
+sel_data<-reduced_values[,sel]
+
+
+boxplot(sel_data,las=2,cex=0.6,names = abbreviate(colnames(sel_data)), main="boxplot of 25 random metabolites before processing")
+
+ggplot(raw_sd_mean,aes(x=mean,y=sd))+geom_point()+labs(x="Mean",y="Standard deviation",title="Mean-variance relationship for the lipid metabolome")
+
+# Attempt for square root transform, which did not yield desired results
+
+# sqrt_met<-sqrt(reduced_values-min(reduced_values))
+# 
+# boxplot(sqrt_met[,sel])
+# sqrt_sd_mean<-data.frame(mean=apply(sqrt_met,2,mean),
+#                         sd=apply(sqrt_met,2,sd))
+# ggplot(sqrt_sd_mean,aes(x=log(mean),y=log(sd)))+geom_point()
+# 
+
+processed_metabolomic_values<-as.data.frame(scale(reduced_values))
+
+
+boxplot(processed_metabolomic_values[,sel],las=2, cex=0,6, names = abbreviate(colnames(sel_data),minlength = 5),main="boxplot of 25 random metabolites after standardisation")
+
+
+
+
+```
+
+#### Add arguments here
+
+We begin by visualising the data with a boxplot of 25 randomly selected
+metabolites, along with a mean-standard deviation plot for the entire
+data set. The boxplots suggests that the data is distributed fairly
+symmetrically, and we observe no clear relation between the mean and
+standard deviation, suggesting that the data is homoscedastic. However,
+the features do differ greatly in their spread and center. For this
+reason we opted to limit the data preprocessing to centering and scaling
+the data. We then observe that the data are centered at 0 and exhibit
+similar interquartile distances in the postprocessing boxplot.
+
+#### 6B) Data handling
+
+```{r Assignment 6B, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+long_met_data=data.frame(sex=factor(metabolomic_exp$Rat.Sex,labels=c("F","M")), 
+                         group=factor(metabolomic_exp$Groups),
+                         metab=I(as.matrix(processed_metabolomic_values)))
+
+
+```
+
+#### 6C) ASCA model:
+
+```{r Assignment 6C, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+asca_mod<-asca(metab~sex+group,data=long_met_data)
+
+summary(asca_mod)
+```
+
+#### Give explanation and interpretation here
+
+2)  In the ASCA table ,"Sum.Sq." represents the sum of squares
+    associated with each factor in the model and quantifies how much of
+    the total variability in the metabolomics data is explained by that
+    factor. It is calculated by decomposing the total sum of squares of
+    the data into contributions from each experimental factor and the
+    residuals.
+
+    Explained variance(Expl.var.) is the percentage of the total sum of
+    squares that is explained by each factor. It is obtained by dividing
+    the sum of squares of a given factor by the total sum of squares and
+    multiplying by 100. This value indicates the relative importance of
+    each factor in explaining the overall variability in the dataset.
+
+3)  The ASCA results show that Sex explains a substantial proportion of
+    the variability in the metabolomics data (45.22%), indicating strong
+    systematic differences in metabolite profiles between sexes. In
+    contrast, the Group factor (Control vs Training at 8 weeks) explains
+    only a small fraction of the total variance (12.80%), suggesting
+    that the training intervention has a relatively minor effect on the
+    metabolomic profiles at this time point. A large proportion of the
+    variance remains in the residuals (41.98%), which reflects
+    individual variability and sources of variation not captured by the
+    experimental factors included in the model. Overall, the ASCA model
+    indicates that sex-related differences dominate the structured
+    variation in the data, while the effect of training is comparatively
+    weak.
+
+#### End of interpretation
+
+#### 6D)
+
+```{r Assignment 6D, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+
+
+scoreplot(asca_mod,factor="group",main="Score plot of the group factor",legend="bottomleft",projections = T)
+
+
+loadingplot(asca_mod,factor="group",scatter=T,main="Loading plot of the group factor")              
+
+load<-loadings(asca_mod,factor = "group")
+
+Importance=sqrt(load[,1]^2+load[,2]^2)
+
+idx<-which(Importance%in% sort(Importance,decreasing = T)[1:20])
+
+load<-as.data.frame(load[idx,])
+load$names<-rownames(load)
+
+
+ggplot(load,aes(`Comp 1`, `Comp 2`,label=abbreviate(names)))+geom_point(size=0.5)+geom_text_repel(size=3,max.overlaps = 12)+labs(x='PC1 (64%)', y='PC2 (20%)',title="Loading plot of the 20 most important metabolites")
+
+
+```
+
+#### Give interpretation of 6D3 here
+
+The score plot for the Group factor shows that most of the group-related
+variation is captured by PC1 (64%), indicating that the main differences
+between groups are driven by a single dominant component. Along this
+axis, there is a clear positive shift from the control group towards the
+1-2 weeks training groups. Interestingly, later training time points are
+barely shifted relative to the controls, with the 8 weeks training group
+even showing a negative shift. This suggests a metabolomic effect that
+is time related, and on which the impact of training is unclear.
+
+PC2 (20%) explains a smaller proportion of the variance and mainly
+reflects within-group variability, as there is considerable overlap
+between groups along this axis. We do observe that at 8 weeks time, the
+control group and training group are fairly separated along this axis,
+while intermediate time points in the training cohort overlap along the
+PC2 axis and are therefore not separated.
+
+The loading plot shows that the group-related separation is driven by a
+limited number of metabolites, while most variables contribute only
+weakly. The plot of the 20 most important metabolites confirms that
+these compounds have the largest influence on the separation observed in
+the score plot, particularly along PC1. Metabolites with similar loading
+directions are positively associated, whereas metabolites loading in
+opposite directions contribute to differences between early and late
+training stages/conditions.
+
+Overall, the score and loading plots indicate that the group effect is
+present but moderate, with training inducing consistent but relatively
+subtle changes in the metabolomic profile. We again observe that sex is
+the dominant source of variance. This interpretation is in agreement
+with the ASCA results, where the group factor explains a smaller
+fraction of the total variance compared to other sources of variation.
+
+#### 6E) Add the two-factor interaction Sex:Group to your model.
+
+```{r Assignment 6E ASCA permutation analysis, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+int_mod<-asca(metab~sex*group,data=long_met_data)
+
+summary(int_mod)
+```
+
+#### Give your conclusion of the interaction model
+
+Including the Sex:Group interaction in the ASCA model shows that sex
+remains the dominant factor influencing the metabolomic profiles,
+explaining the largest proportion of the total variance. The training
+effect (Group) alone explains a much smaller fraction of the
+variability, indicating that the overall impact of training at 8 weeks
+is modest. The interaction term Sex:Group explains 7.72% of variance,
+suggesting that the metabolic response to training differs slightly
+between males and females. Although this interaction effect is smaller
+than the main effects, it suggests the presence of sex-dependent
+training responses rather than a uniform effect across sexes. A
+substantial proportion of the variance remains in the residuals
+(34.26%), reflecting biological variability and other sources of
+variation not captured by the experimental factors included in the
+model. Overall, the ASCA model with interaction indicates that while sex
+is the dominant driver of metabolic variation, training induces modest
+effects that partially depend on sex.
+
+#### End of conclusion
+
+#### 6F: Statistical Inference
+
+```{r Assignment 6F ASCA permutation analysis, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+mod.perm<-permutation(int_mod)
+summary(mod.perm)
+par(mfrow=c(1,3))
+permutationplot(mod.perm,factor = "sex")
+permutationplot(mod.perm,factor = "group")
+permutationplot(mod.perm,factor = "sex:group")
+```
+
+#### Give explanation of 6F2 here
+
+In ASCA, a permutation test is used instead of a F-test because the
+response variable is multivariate and high-dimensional, with many
+correlated variables. Metabolomics data typically violate the
+assumptions required for an F-test, such as multivariate normality,
+independence between variables, and error structure. In addition, the
+number of variables often exceeds the number of samples, making
+classical parametric tests unreliable.
+
+Permutation testing does not rely on these assumptions. Instead, it
+assesses significance by repeatedly permuting the sample labels and
+recalculating the explained variance under the null hypothesis of no
+association between the experimental factors and the data. This
+generates an empirical null distribution, against which the observed
+explained variance can be compared. As a result, permutation tests
+provide a robust and appropriate way to assess statistical significance
+in ASCA.
+
+#### Give interpretation of 6F3 permutation test here
+
+The permutation test shows that all three factors are statistically
+significant, with a p-value of 0.00. This indicates that the observed
+explained variance for Sex, Group and their interaction term Sex:Group
+are much larger than expected under the null hypothesis. This confirms
+that these factors have has a significant effect on the metabolomic
+profiles.
+
+Overall, the permutation test supports the conclusion that sex is the
+main driver of systematic variation in the metabolomics data, with
+significant, albeit smaller, effects of training and its interaction
+with sex.
+
+
+#### 6G)
+
+```{r Assignment 6G ASCA Combination model, include=TRUE, eval=TRUE, echo=TRUE, message=FALSE}
+# 1
+
+comb_mod<-asca(metab~sex+comb(group+sex:group),long_met_data)
+summary(comb_mod)
+
+levs <- levels(long_met_data$sex)
+cols <- seq_along(levs)
+
+
+timeplot(comb_mod,factor = "sex", x_time = T, 
+         time="group",
+         comb = 2,
+         comp = 1,
+         xaxt='n',
+         main="PC1 score plot as a function of training group per sex",
+         ylab="PC1 score",
+         xlab = "Sex")
+
+legend("bottomright",
+       legend = levs,
+       col = cols,
+       lwd=2,
+       cex = 0.6)
+
+levs <- levels(long_met_data$group)
+cols <- seq_along(levs)
+
+
+timeplot(comb_mod,time='sex',factor="group",comb=2,comp=1,x_time = T,
+          main="PC1 score plot as a function of sex per treatment group",
+         ylab="PC1 score",
+         xlab="Training group")
+
+
+legend("bottomright",
+       legend = levs,
+       col = cols,
+       lwd=2,
+       cex = 0.6)
+
+
+##
+loadingplot(comb_mod,pc=1,factor = "sex",
+            main="PC1 loading plot of lipid metabolites",
+            xlab="Metabolite",
+            ylab="PC1 loading")
+        
+```
+
+
+The combined effect of Group and Sex:Group explains a substantial
+proportion of the structured variation in the metabolomic data (20.51%),
+indicating that the training effect cannot be fully interpreted without
+considering sex differences.
+
+The timeplots of the PC1 scores show that females and males follow
+different response patterns across the training groups, confirming the
+presence of a sex-dependent training effect. We observe male subjects
+scoring higher along the PC1 axis in the control group and at 8 weeks of
+training, while female subjects score higher in the other groups. This
+could also suggest an aging related phenomenon, given the similarity
+between subjects after 8 weeks.
+
+Across groups, the general trend along PC1 suggests that training
+induces systematic changes in the metabolomic profiles, but the
+magnitude and direction of these changes differ between sexes. While
+both females and males show consistent trends across training duration,
+the separation between groups is more pronounced for some time points,
+indicating that sex modulates the metabolic response to training rather
+than simply shifting all profiles in the same way.
+
+The second timeplot, where PC1 scores are shown as a function of sex for
+each group, further supports this interpretation by showing that group
+differences are not constant across sexes. This confirms that the
+interaction between sex and group contributes meaningfully to the
+observed variation.
+
+The loading plot of PC1 shows that the combined effect is driven by a
+subset of metabolites with higher loadings, while most metabolites
+contribute only weakly. This indicates that the sex-dependent training
+response is associated with coordinated changes in a limited number of
+metabolites rather than a global shift of the metabolome.
+
+Overall, the combined ASCA model reveals that training induces moderate
+but structured metabolic changes that depend on sex, and that combining
+the main Group effect with the Sex:Group interaction provides a clearer
+and more biologically meaningful interpretation of the training
+response.
+
+
