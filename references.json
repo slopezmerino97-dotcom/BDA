@@ -1,0 +1,130 @@
+[
+    {
+        "DOI": "10.1038/nprot.2013.099",
+        "ISSN": "1754-2189",
+        "URL": "http://dx.doi.org/10.1038/nprot.2013.099",
+        "author": [
+            {
+                "family": "Anders",
+                "given": "Simon"
+            },
+            {
+                "family": "McCarthy",
+                "given": "Davis J"
+            },
+            {
+                "family": "Chen",
+                "given": "Yunshun"
+            },
+            {
+                "family": "Okoniewski",
+                "given": "Michal"
+            },
+            {
+                "family": "Smyth",
+                "given": "Gordon K"
+            },
+            {
+                "family": "Huber",
+                "given": "Wolfgang"
+            },
+            {
+                "family": "Robinson",
+                "given": "Mark D"
+            }
+        ],
+        "container-title": "Nature Protocols",
+        "container-title-short": "Nat Protoc",
+        "id": "anders2013",
+        "is-referenced-by-count": "966",
+        "issue": "9",
+        "issued": {
+            "date-parts": [
+                [
+                    2013,
+                    8,
+                    22
+                ]
+            ]
+        },
+        "language": "en",
+        "member": "297",
+        "page": "1765-1786",
+        "prefix": "10.1038",
+        "providerkey": "doi",
+        "publisher": "Springer Science and Business Media LLC",
+        "reference-count": "66",
+        "references-count": "66",
+        "score": "1",
+        "source": "Crossref",
+        "title": "Count-based differential expression analysis of RNA sequencing data using R and Bioconductor",
+        "type": "article-journal",
+        "volume": "8"
+    },
+    {
+        "DOI": "10.1101/gr.108662.110",
+        "ISSN": "1088-9051",
+        "URL": "http://dx.doi.org/10.1101/gr.108662.110",
+        "author": [
+            {
+                "family": "Brooks",
+                "given": "Angela N."
+            },
+            {
+                "family": "Yang",
+                "given": "Li"
+            },
+            {
+                "family": "Duff",
+                "given": "Michael O."
+            },
+            {
+                "family": "Hansen",
+                "given": "Kasper D."
+            },
+            {
+                "family": "Park",
+                "given": "Jung W."
+            },
+            {
+                "family": "Dudoit",
+                "given": "Sandrine"
+            },
+            {
+                "family": "Brenner",
+                "given": "Steven E."
+            },
+            {
+                "family": "Graveley",
+                "given": "Brenton R."
+            }
+        ],
+        "container-title": "Genome Research",
+        "container-title-short": "Genome Res.",
+        "id": "brooks2010",
+        "is-referenced-by-count": "188",
+        "issue": "2",
+        "issued": {
+            "date-parts": [
+                [
+                    2010,
+                    10,
+                    4
+                ]
+            ]
+        },
+        "language": "en",
+        "member": "246",
+        "page": "193-202",
+        "prefix": "10.1101",
+        "providerkey": "doi",
+        "publisher": "Cold Spring Harbor Laboratory",
+        "reference-count": "41",
+        "references-count": "41",
+        "score": "1",
+        "source": "Crossref",
+        "title": "Conservation of an RNA regulatory map between <i>Drosophila</i> and mammals",
+        "type": "article-journal",
+        "volume": "21"
+    }
+]
