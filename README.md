@@ -2,7 +2,10 @@
 
 This repository contains an R-based project developed during the Biosystems Data Analysis course of the MSc Bioinformatics and Systems Biology (VU Amsterdam / UvA)
 The project explores transcriptomics and metabolomics datasets from the MoTrPAC study using multivariate statistical methods.
+*OPEN BDA-project-2025-2026 (3)-1.Rmd*
+
 #METHODS
+
 -Data preprocessing
 
 -Gene expression analysis
